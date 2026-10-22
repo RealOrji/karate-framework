@@ -1,0 +1,7 @@
+[
+  { "description": "deposit not paid",            "firstname": "Ada",    "totalprice": 150,  "depositpaid": false, "nights": 2,  "additionalneeds": "Breakfast" },
+  { "description": "long stay",                   "firstname": "Grace",  "totalprice": 4200, "depositpaid": true,  "nights": 21, "additionalneeds": "Airport pickup" },
+  { "description": "single night stay",           "firstname": "Alan",   "totalprice": 89,   "depositpaid": true,  "nights": 1,  "additionalneeds": "Late checkout" },
+  { "description": "free promotional booking",    "firstname": "Linus",  "totalprice": 0,    "depositpaid": false, "nights": 3,  "additionalneeds": "Parking" },
+  { "description": "accented guest name",         "firstname": "José",   "totalprice": 320,  "depositpaid": true,  "nights": 4,  "additionalneeds": "Extra pillows" }
+]

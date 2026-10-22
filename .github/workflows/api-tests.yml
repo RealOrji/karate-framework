@@ -1,0 +1,192 @@
+name: API Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1-5" # nightly regression, 06:00 UTC on weekdays
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment (karate.env)
+        type: choice
+        options: [qa, dev, staging]
+        default: qa
+      tags:
+        description: "Karate tags, e.g. @smoke | @TC-BKG-001,@TC-BKG-002 | ~@negative. Empty = full regression"
+        type: string
+        default: ""
+      threads:
+        description: Parallel threads
+        type: string
+        default: "5"
+
+concurrency:
+  group: api-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  traceability:
+    name: Test case traceability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Verify manual test cases are mapped to features
+        run: ./mvnw -B test -Dtest=TraceabilityTest
+
+      - name: Publish traceability matrix
+        if: always()
+        run: |
+          if [ -f target/traceability-report.md ]; then
+            cat target/traceability-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  api-tests:
+    name: Karate API tests
+    needs: traceability
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      checks: write
+    env:
+      KARATE_ENV: ${{ inputs.environment || 'qa' }}
+      THREADS: ${{ inputs.threads || '5' }}
+      INPUT_TAGS: ${{ inputs.tags }}
+      # Optional repository secrets; karate-config.js falls back to the public demo values when unset.
+      BOOKER_USERNAME: ${{ secrets.BOOKER_USERNAME }}
+      BOOKER_PASSWORD: ${{ secrets.BOOKER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Select test scope
+        id: scope
+        run: |
+          if [ -n "$INPUT_TAGS" ]; then
+            tags="$INPUT_TAGS"
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            tags="@smoke"
+          else
+            tags=""
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "Environment: $KARATE_ENV | Tags: ${tags:-<full regression>} | Threads: $THREADS"
+
+      - name: Run Karate suite
+        env:
+          TAGS: ${{ steps.scope.outputs.tags }}
+        run: |
+          args=(-B test -Dtest=ApiTestSuite -Dkarate.env="$KARATE_ENV" -Dthreads="$THREADS")
+          if [ -n "$TAGS" ]; then
+            args+=(-Dkarate.options="--tags $TAGS")
+          fi
+          ./mvnw "${args[@]}"
+
+      - name: Publish test results
+        if: always()
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: target/karate-reports/*.xml
+          check_name: Karate results (${{ env.KARATE_ENV }})
+          include_passed: false
+          detailed_summary: true
+
+      - name: Write job summary
+        if: always()
+        run: |
+          summary=target/karate-reports/karate-summary-json.txt
+          if [ ! -f "$summary" ]; then
+            echo "No Karate summary was produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Karate run - \`$KARATE_ENV\`"
+            echo
+            echo "| Features passed | Features failed | Scenarios passed | Scenarios failed | Elapsed (s) |"
+            echo "|---|---|---|---|---|"
+            jq -r '"| \(.featuresPassed) | \(.featuresFailed) | \(.scenariosPassed) | \(.scenariosfailed) | \(.elapsedTime / 1000 | floor) |"' "$summary"
+            echo
+            echo "Download the **karate-reports** artifact for the full HTML reports."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: karate-reports
+          path: |
+            target/karate-reports/
+            target/cucumber-html-reports/
+            target/karate.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  publish-reports:
+    # CD: publishes the latest main-branch report to GitHub Pages.
+    # Opt in by enabling Pages (Settings > Pages > Source: GitHub Actions)
+    # and setting the repository variable PUBLISH_REPORTS=true.
+    name: Publish reports to GitHub Pages
+    needs: api-tests
+    if: >-
+      always() && vars.PUBLISH_REPORTS == 'true' &&
+      github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
+      (needs.api-tests.result == 'success' || needs.api-tests.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: karate-reports
+          path: reports
+
+      - name: Build site
+        run: |
+          mkdir -p site
+          cp -r reports/karate-reports site/karate
+          if [ -d reports/cucumber-html-reports ]; then cp -r reports/cucumber-html-reports site/cucumber; fi
+          cat > site/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>API Test Reports</title>
+          <style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;line-height:1.6}</style></head>
+          <body>
+            <h1>API Test Reports</h1>
+            <p>Commit <code>${GITHUB_SHA::7}</code> &middot; run <a href="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}">#${GITHUB_RUN_NUMBER}</a></p>
+            <ul>
+              <li><a href="karate/karate-summary.html">Karate summary report</a></li>
+              <li><a href="cucumber/overview-features.html">Cucumber HTML report</a></li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5

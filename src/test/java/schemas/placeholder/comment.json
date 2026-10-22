@@ -1,0 +1,7 @@
+{
+  "postId": "#number",
+  "id": "#number",
+  "name": "#string",
+  "email": "#regex [^@\\s]+@[^@\\s]+\\.[^@\\s]+",
+  "body": "#string"
+}
