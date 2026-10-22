@@ -18,8 +18,8 @@
 
         <karate.version>1.5.2</karate.version>
         <cucumber.reporting.version>5.12.0</cucumber.reporting.version>
-        <surefire.version>3.5.4</surefire.version>
-        <compiler.plugin.version>3.14.1</compiler.plugin.version>
+        <surefire.version>3.6.0</surefire.version>
+        <compiler.plugin.version>3.16.0</compiler.plugin.version>
 
         <!-- Runtime knobs; override on the command line, e.g. -Dkarate.env=staging -Dthreads=8 -->
         <karate.env>qa</karate.env>
